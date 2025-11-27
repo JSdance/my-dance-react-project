@@ -7,7 +7,6 @@ import dynamic from "next/dynamic";
 import "react-quill-new/dist/quill.snow.css";
 
 // 引入编辑器
-// @ts-expect-error: ignore dynamic import type
 const ReactQuill = dynamic(() => import("react-quill-new"), {
   ssr: false,
 }) as any;
