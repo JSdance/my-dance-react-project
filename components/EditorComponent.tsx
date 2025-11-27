@@ -4,88 +4,67 @@ import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import dynamic from 'next/dynamic';
 
-// 【关键点1】静态引入，仅用于获取 TypeScript 类型
-// Next.js 编译时会自动处理，只要不把这个 ReactQuill 用在 return 的 JSX 里，就不会报错
-import ReactQuill from 'react-quill-new';
+// 1. 解决样式不加载：确保这行引用存在
 import 'react-quill-new/dist/quill.snow.css';
 
-// 【关键点2】动态引入，用于实际页面渲染 (避免 document not defined)
-const ReactQuillDynamic = dynamic(() => import('react-quill-new'), { 
-  ssr: false,
-  loading: () => <p>编辑器加载中...</p> 
-});
-
-// 定义 API 返回的数据接口 (可选，为了更规范)
-interface BlockData {
-  index: number;
-  content: string;
-}
-
-interface ApiResponse {
-  data: {
-    index: number;
-    newContent: string;
-  }[];
-}
+// 2. 解决 "document is not defined"：关闭 SSR
+const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false }) as any;
 
 export default function EditorComponent() {
-  const [value, setValue] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
-
-  // 【关键点3】这里明确指定泛型为 ReactQuill 类
-  // 这样 quillRef.current 就会自动提示 getEditor() 等方法
-  const quillRef = useRef<ReactQuill>(null);
+  const [value, setValue] = useState('');
+  const [loading, setLoading] = useState(false);
+  
+  // 3. 解决 TypeScript Ref 报错：这里定义为 any
+  const quillRef = useRef<any>(null);
 
   const handleRewrite = async () => {
-    // TypeScript 此时知道 current 可能是 null，所以必须做非空检查
+    // 校验编辑器实例是否存在
     if (!quillRef.current) return;
 
-    // 【关键点4】现在输入 . 之后，IDE 会自动提示 getEditor()！
-    // getEditor() 返回的是 Quill 核心实例
+    // 获取编辑器核心对象
+    // 注意：如果这里报错 .getEditor is not a function，说明 ref 绑定没生效
     const editor = quillRef.current.getEditor();
     
-    // 获取 Delta 数据
     const delta = editor.getContents();
     const ops = delta.ops;
 
-    if (!ops || ops.length === 0) {
-      alert('请先粘贴文章');
-      return;
-    }
+    if (!ops || ops.length === 0) return alert('请先粘贴文章');
 
     setLoading(true);
 
     try {
-      let textBlocks: BlockData[] = [];
+      let textBlocks: any[] = [];
       
-      ops.forEach((op, index) => {
-        // op 的类型来自 Quill 定义，通常是 any 或特定接口，这里我们可以做简单的断言
-        if (typeof op.insert === 'string' && op.insert.trim().length > 5) {
+      ops.forEach((op: any, index: number) => {
+        if (typeof op.insert === 'string' && op.insert.trim() !== '') {
           textBlocks.push({ index, content: op.insert });
         }
       });
 
-      if (textBlocks.length === 0) throw new Error('未检测到有效文本');
+      if (textBlocks.length === 0) {
+        alert('未检测到有效文字');
+        setLoading(false);
+        return;
+      }
 
       // 发送请求
-      const res = await axios.post<ApiResponse>('/api/rewrite', { blocks: textBlocks });
+      const res = await axios.post('/api/rewrite', { blocks: textBlocks });
       const newTexts = res.data.data;
 
-      // 拼回数据
-      newTexts.forEach((item) => {
+      // 拼装回编辑器
+      newTexts.forEach((item: any) => {
         if (ops[item.index]) {
           ops[item.index].insert = item.newContent;
         }
       });
 
-      // 更新编辑器
-      editor.setContents(ops, 'api'); 
-      
-      alert('改写完成！');
+      // 更新内容，保持用户选区模式
+      editor.setContents(ops, 'user');
+      alert('✅ 改写完成！');
 
     } catch (error) {
       console.error(error);
-      alert('改写失败');
+      alert('❌ 改写失败，请检查控制台');
     } finally {
       setLoading(false);
     }
@@ -93,29 +72,49 @@ export default function EditorComponent() {
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800">AI 写实化改写助手 (TS版)</h1>
-        <button 
-          onClick={handleRewrite}
-          disabled={loading}
-          className={`px-6 py-2 rounded text-white transition-colors ${
-            loading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-        >
-          {loading ? '处理中...' : '一键改写'}
-        </button>
-      </div>
+      <h1 className="text-3xl font-bold text-gray-800 mb-6">文章改写助手</h1>
       
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        {/* 【关键点5】这里渲染的是 Dynamic 组件，但 ref 会转发给内部实例 */}
-        <ReactQuillDynamic 
+        <ReactQuill 
           theme="snow" 
-          // @ts-ignore (由于 dynamic 包装导致 ref 类型推断偶尔失效，这里忽略是安全的，或者用 forwardRef 包装但太麻烦)
-          ref={quillRef}
+          
+          // 3. 【核心修改】解决 TypeScript Ref 报错的终极方案：
+          // 不要直接写 ref={quillRef}
+          // 而是用回调函数，强制把 el 赋值给 current，TS 就不会纠结类型了
+          ref={(el: any) => {
+            quillRef.current = el;
+          }}
+          
           value={value} 
           onChange={setValue}
+          placeholder="请直接 Ctrl+V 粘贴带图的文章..."
           className="h-[600px]"
+          modules={{
+            toolbar: [
+              [{ 'header': [1, 2, false] }],
+              ['bold', 'italic', 'underline', 'strike', 'blockquote'],
+              [{'list': 'ordered'}, {'list': 'bullet'}],
+              ['link', 'image'],
+              ['clean']
+            ],
+          }}
         />
+      </div>
+      
+      <div className="mt-6 text-right">
+         <button 
+          onClick={handleRewrite}
+          disabled={loading}
+          className={`
+            px-6 py-3 rounded-lg font-medium text-white text-lg
+            ${loading 
+              ? 'bg-gray-400 cursor-not-allowed' 
+              : 'bg-indigo-600 hover:bg-indigo-700 shadow-lg'
+            }
+          `}
+        >
+          {loading ? 'AI 正在思考中...' : '✨ 开始改写'}
+        </button>
       </div>
     </div>
   );
